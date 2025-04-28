@@ -19,18 +19,21 @@ generate_output.py builds separate autoencoders for each domain, and then connec
 Loss = reconstr_loss of each domain + prediction_error of co-assay data from one domain to the other.
 """
 
-def load_rna_file_sparse(url1):
+def load_rna_file_sparse(url1, dummy=False):
     """
     load scRNA mtx file to sparse matrix, binarize the data; load batch info
     """
     #logger.info('url1={}'.format(url1)); assert os.path.isfile(url1);
     data_rna = mmread(url1).tocsr()
     data_rna = data_rna.astype(int)
-    data_rna_batch = mmread(url1.split('.mtx')[0]+'_barcodes_dataset.mtx').tocsr()
+    if dummy is True:
+        data_rna_batch = scipy.sparse.csr_matrix(np.ones((data_rna.shape[0], 1)))
+    else:
+        data_rna_batch = mmread(url1.split('.mtx')[0]+'_barcodes_dataset.mtx').tocsr()
     return data_rna, data_rna_batch
 
 
-def load_atac_file_sparse(url2, index_range):
+def load_atac_file_sparse(url2, index_range, dummy=False):
     """
     load scATAC mtx file to sparse matrix, binarize the data; load batch info
     index_range: specify the index of peaks to be selected - e.g. filter out non-auto chromosome peaks
@@ -39,11 +42,14 @@ def load_atac_file_sparse(url2, index_range):
     data_atac = mmread(url2).tocsr()[:,index_range]
     data_atac[data_atac != 0] = 1
     data_atac = data_atac.astype(int)
-    data_atac_batch = mmread(url2.split('.mtx')[0]+'_barcodes_dataset.mtx').tocsr()
+    if dummy is True:
+        data_atac_batch = scipy.sparse.csr_matrix(np.ones((data_atac.shape[0], 1)))
+    else:
+        data_atac_batch = mmread(url2.split('.mtx')[0]+'_barcodes_dataset.mtx').tocsr()
     return data_atac, data_atac_batch
 
 
-def pred_rna_norm(autoencoder, input_dim_rna, data_atac_test, batch_atac_test, output_prefix='', batch_size=16):
+def pred_rna_norm(autoencoder, input_dim_rna, data_atac_test, batch_atac_test, output_prefix='test', batch_size=16):
     """
     predict scRNA normalized expression from scATAC input
     Parameters
@@ -70,7 +76,7 @@ def pred_rna_norm(autoencoder, input_dim_rna, data_atac_test, batch_atac_test, o
         np.savetxt(output_prefix+'_rnanorm_pred.txt', test_translation_rna_norm, delimiter='\t', fmt='%1.10f')
 
 
-def pred_atac_norm(autoencoder, data_rna_test, batch_rna_test, input_dim_atac, output_prefix='', atac_index='', batch_size=16):
+def pred_atac_norm(autoencoder, data_rna_test, batch_rna_test, input_dim_atac, output_prefix='test', atac_index='', batch_size=16):
     """
     predict scATAC normalized expression from scRNA input
     Parameters
@@ -266,7 +272,7 @@ def train_polarbear_model(outdir, sim_url, train_test_split, path_x, path_y, pat
     """
     os.system('mkdir -p '+ outdir)
     ## input peak file and filter out peaks in sex chromosomes
-    chr_annot = pd.read_csv(path_y.split('snareseq')[0]+ 'peaks.txt', sep=':', header=None)
+    '''chr_annot = pd.read_csv(path_y.split('snareseq')[0]+ 'peaks.txt', sep=':', header=None)
     chr_annot.columns = ['chr','pos']
     chr_list = {}
     for chri in chr_annot['chr'].unique():
@@ -276,18 +282,31 @@ def train_polarbear_model(outdir, sim_url, train_test_split, path_x, path_y, pat
     chr_list_range = []
     for chri in chr_list.keys():
         chr_list_range += chr_list[chri]
-    
+    '''
+    chr_annot = pd.read_csv('data/Lymphoma_ATAC_chr.csv', sep=':', header=None)
+    chr_annot.columns = ['chr','pos']
+    chr_list = {}
+    for chri in chr_annot['chr'].unique():
+        if chri not in ['chrX','chrY']:
+            chr_list[int(chri[3:])] = [i for i, x in enumerate(chr_annot['chr']) if x == chri];
+
+    chr_list_range = []
+    for chri in chr_list.keys():
+        chr_list_range += chr_list[chri]
     ## save the list of peaks
     chr_annot.iloc[chr_list_range].to_csv(sim_url+'_peaks.txt', index=False, sep=':', header=None)
 
-    data_rna, data_rna_batch = load_rna_file_sparse(path_x)
-    data_atac, data_atac_batch = load_atac_file_sparse(path_y, chr_list_range)
+    data_rna, data_rna_batch = load_rna_file_sparse(path_x, dummy=True)
+    data_atac, data_atac_batch = load_atac_file_sparse(path_y, chr_list_range, dummy=True)
     
     ## ======================================
     ## define train, validation and test
+    '''
     data_rna_barcode = pd.read_csv(path_x.split('.mtx')[0]+ '_barcodes.tsv', delimiter='\t')
     barcode_list = data_rna_barcode['index'].to_list()
-
+    '''
+    data_rna_barcode = pd.read_csv('data/lym_RNA_barcodes.csv', sep=',', header=0)
+    barcode_list = data_rna_barcode['index'].to_list()
     if train_test_split == 'babel':
         # use the exact train/val/test split in BABEL
         with open('./data/babel_test_barcodes.txt') as fp:
@@ -454,7 +473,8 @@ def main(args):
     kl_weight = args.kl_weight
     train_test_split = args.train_test_split
     
-    sim_url = args.outdir + 'polarbear_'+ train_test_split +'_'+ dispersion + '_'+ str(nlayer)+ 'l_lr'+ str(learning_rate_y)+'_'+ str(learning_rate_x)+'_'+ str(learning_rate_xy)+'_'+ str(learning_rate_yx)+'_dropout'+ str(dropout_rate)+'_ndim'+str(embed_dim_x)+'_'+str(embed_dim_y)+'_batch'+ str(batch_size)+ '_'+ trans_ver + '_improvement'+str(patience)+'_nwarmup_'+str(nepoch_warmup_x)+'_'+str(nepoch_warmup_y)+'_klstart'+str(nepoch_klstart_x)+'_'+ str(nepoch_klstart_y)+'_klweight'+str(kl_weight)+'_hiddenfrac'+str(hidden_frac)
+    #sim_url = args.outdir + 'polarbear_'+ train_test_split +'_'+ dispersion + '_'+ str(nlayer)+ 'l_lr'+ str(learning_rate_y)+'_'+ str(learning_rate_x)+'_'+ str(learning_rate_xy)+'_'+ str(learning_rate_yx)+'_dropout'+ str(dropout_rate)+'_ndim'+str(embed_dim_x)+'_'+str(embed_dim_y)+'_batch'+ str(batch_size)+ '_'+ trans_ver + '_improvement'+str(patience)+'_nwarmup_'+str(nepoch_warmup_x)+'_'+str(nepoch_warmup_y)+'_klstart'+str(nepoch_klstart_x)+'_'+ str(nepoch_klstart_y)+'_klweight'+str(kl_weight)+'_hiddenfrac'+str(hidden_frac)
+    sim_url = args.outdir + 'first_train'
     print(sim_url)
     train_polarbear_model(args.outdir, sim_url, train_test_split, args.path_x, args.path_y, args.path_x_single, args.path_y_single, dispersion, embed_dim_x, embed_dim_y, nlayer, dropout_rate, learning_rate_x, learning_rate_y, learning_rate_xy, learning_rate_yx, trans_ver, hidden_frac, kl_weight, patience, nepoch_warmup_x, nepoch_warmup_y, nepoch_klstart_x, nepoch_klstart_y, batch_size, args.train, args.evaluate, args.predict)
 
